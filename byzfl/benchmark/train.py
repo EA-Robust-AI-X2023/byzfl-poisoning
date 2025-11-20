@@ -128,6 +128,19 @@ def start_training(params):
         "batch_size": batch_size,
     })
     client_dataloaders = data_distributor.split_data()
+    
+    
+    # Byzantine Client Setup
+
+    attack_parameters = params_manager.get_attack_parameters()
+    attack_parameters["aggregator_info"] = params_manager.get_aggregator_info()
+    attack_parameters["pre_agg_list"] = params_manager.get_preaggregators()
+    attack_parameters["f"] = nb_byz_clients
+
+    label_flipping_attack = False
+    attack_name = params_manager.get_attack_name()
+
+    label_flipping_attack = attack_name == "LabelFlipping"
 
     # Initialize Honest Clients
     honest_clients = [
@@ -140,13 +153,16 @@ def start_training(params):
             "weight_decay": params_manager.get_honest_clients_weight_decay(),
             "milestones": params_manager.get_milestones(),
             "learning_rate_decay": params_manager.get_learning_rate_decay(),
-            "LabelFlipping": "LabelFlipping" == params_manager.get_attack_name(),
+            "LabelFlipping": "LabelFlipping" == i==nb_honest_clients-1 and params_manager.get_attack_name(),
             "training_dataloader": client_dataloaders[i],
             "momentum": params_manager.get_honest_clients_momentum(),
             "nb_labels": params_manager.get_nb_labels(),
             "store_per_client_metrics": params_manager.get_store_per_client_metrics(),
+            "permutation": params_manager.get_permutation()
         }) for i in range(nb_honest_clients)
     ]
+    
+
 
     # Server Setup, Use SGD Optimizer
     server = Server({
@@ -163,17 +179,8 @@ def start_training(params):
         "pre_agg_list": params_manager.get_preaggregators(),
     })
 
-    # Byzantine Client Setup
-
-    attack_parameters = params_manager.get_attack_parameters()
-    attack_parameters["aggregator_info"] = params_manager.get_aggregator_info()
-    attack_parameters["pre_agg_list"] = params_manager.get_preaggregators()
-    attack_parameters["f"] = nb_byz_clients
-
-    label_flipping_attack = False
-    attack_name = params_manager.get_attack_name()
-
-    label_flipping_attack = attack_name == "LabelFlipping"
+    
+        
 
     attack = {
         "name": attack_name,
@@ -267,11 +274,12 @@ def start_training(params):
             honest_gradients = [client.get_flat_gradients_with_momentum() for client in honest_clients]
 
             # Deal with Label Flipping Attack
-            attack_input = (
-                [client.get_flat_flipped_gradients() for client in honest_clients]
-                if label_flipping_attack
-                else honest_gradients
-            )
+            # attack_input = (
+            #     [client.get_flat_flipped_gradients() for client in honest_clients]
+            #     if label_flipping_attack
+            #     else honest_gradients
+            # )
+            attack_input = honest_gradients
 
             # Apply Byzantine Attack
             byz_vector = byz_client.apply_attack(attack_input)

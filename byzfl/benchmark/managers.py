@@ -419,6 +419,13 @@ class ParamsManager(object):
         read = self._read_object(path)
         return self._parameter_to_use(default, read)
 
+    def get_permutation(self):
+        default = {0:9, 1:8, 2:7, 3:6, 4:5, 5:4, 6:3, 7:2, 8:1, 9:0}
+        path = ["attack", "parameters", "permutation"]
+        read = self._read_object(path)
+        return self._parameter_to_use(default, read)
+        
+    
     # ----------------------------------------------------------------------
     #  Evaluation and Results Accessors
     # ----------------------------------------------------------------------

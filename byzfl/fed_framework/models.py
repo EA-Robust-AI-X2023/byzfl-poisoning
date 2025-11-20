@@ -105,6 +105,34 @@ class fc_mnist(nn.Module):
         x = F.relu(self._f1(x.view(-1, 28 * 28)))
         x = F.log_softmax(self._f2(x), dim=1)
         return x
+    
+class softmax_mnist(nn.Module):
+    """
+    Softmax Regression Model for MNIST, from Peng et al paper "mean is more robust"
+
+    Description:
+    ------------
+    A simple softmax regression model for the MNIST dataset. It consists of 
+    a single linear layer.
+
+    Examples:
+    ---------
+    >>> model = softmax_mnist()
+    >>> x = torch.randn(16, 28*28)  # Batch of 16 MNIST images
+    >>> output = model(x)
+    >>> print(output.shape)
+    torch.Size([16, 10])
+    """
+    def __init__(self, nb_classes=10):
+        """Initialize the model parameters."""
+        super().__init__()
+        self._linear = nn.Linear(784, nb_classes)
+        self.nb_classes = nb_classes
+
+    def forward(self, x):
+        """Perform a forward pass through the model."""
+        return self._linear(x.view(-1, 784))
+    
 
 
 class cnn_mnist(nn.Module):

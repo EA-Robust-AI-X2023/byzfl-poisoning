@@ -52,6 +52,8 @@ class Client(ModelBaseInterface):
         self.store_per_client_metrics = params["store_per_client_metrics"]
         self.loss_list = list()
         self.train_acc_list = list()
+        self.permutation = [params["permutation"][i] for i in range(len(params["permutation"]))] if self.labelflipping else [i for i in range(self.nb_labels)]
+        
 
     def _sample_train_batch(self):
         """
@@ -85,13 +87,19 @@ class Client(ModelBaseInterface):
         inputs, targets = self._sample_train_batch()
         inputs, targets = inputs.to(self.device), targets.to(self.device)
 
+        #on supprime le comportement de label flipping de base de la librairie
+        # if self.labelflipping:
+        #     self.model.eval()
+        #     targets_flipped = targets.sub(self.nb_labels - 1).mul(-1)
+        #     self._backward_pass(inputs, targets_flipped)
+        #     self.gradient_LF = self.get_dict_gradients()
+        #     self.model.train()
+        
+        #à la place, on change directement les targets:
         if self.labelflipping:
-            self.model.eval()
-            targets_flipped = targets.sub(self.nb_labels - 1).mul(-1)
-            self._backward_pass(inputs, targets_flipped)
-            self.gradient_LF = self.get_dict_gradients()
-            self.model.train()
-
+            perm = torch.tensor(self.permutation, device=self.device)
+            targets = perm[targets]
+        
         train_loss_value = self._backward_pass(inputs, targets, train_acc=self.store_per_client_metrics)
 
         if self.store_per_client_metrics:
