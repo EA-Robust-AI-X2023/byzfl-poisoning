@@ -99,6 +99,7 @@ class Client(ModelBaseInterface):
         if self.labelflipping:
             perm = torch.tensor(self.permutation, device=self.device)
             targets = perm[targets]
+            print("flipping labels")
         
         train_loss_value = self._backward_pass(inputs, targets, train_acc=self.store_per_client_metrics)
 
