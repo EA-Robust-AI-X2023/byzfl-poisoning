@@ -3,3 +3,10 @@ build
 dist
 byzfl.egg*
 setup.py
+
+tests/data/*
+tests/tests_new_byzfl_fork/results
+
+*.pyc
+
+*/__init__.py

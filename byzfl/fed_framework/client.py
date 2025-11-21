@@ -3,6 +3,8 @@ import numpy as np
 
 from byzfl.fed_framework import ModelBaseInterface
 from byzfl.utils.conversion import flatten_dict
+import byzfl.poisonning.poisoning_attacks as poisoning_attacks 
+import inspect
 
 class Client(ModelBaseInterface):
 
@@ -52,8 +54,26 @@ class Client(ModelBaseInterface):
         self.store_per_client_metrics = params["store_per_client_metrics"]
         self.loss_list = list()
         self.train_acc_list = list()
-        self.permutation = [params["permutation"][i] for i in range(len(params["permutation"]))] if self.labelflipping else [i for i in range(self.nb_labels)]
+        self.poisoning_attack_name = params["poisoning_attack_info"]["name"] if self.labelflipping else "NoAttack"
         
+        #initialize the attack:
+        if self.labelflipping:
+            self.poisoning_attack = getattr(poisoning_attacks, self.poisoning_attack_name)
+            signature_attack = inspect.signature(self.poisoning_attack.__init__)
+
+            params_poisoning= params["poisoning_attack_info"]
+            
+            filtered_parameters = {}
+            for parameter in signature_attack.parameters.values():
+                param_name = parameter.name
+                if param_name in params_poisoning["parameters"]:
+                    filtered_parameters[param_name] = params_poisoning["parameters"][param_name]
+
+                # If something goes wrong
+                elif param_name == "p":
+                    filtered_parameters[param_name] = 1.0
+
+            self.poisoning_attack = self.poisoning_attack(**filtered_parameters)
 
     def _sample_train_batch(self):
         """
@@ -69,10 +89,12 @@ class Client(ModelBaseInterface):
             A tuple containing the input data and corresponding target labels for the current batch.
         """
         try:
-            return next(self.train_iterator)
+            inputs, targets= next(self.train_iterator)
         except StopIteration:
             self.train_iterator = iter(self.training_dataloader)
-            return next(self.train_iterator)
+            inputs, targets= next(self.train_iterator)
+            
+        return inputs,targets
 
     def compute_gradients(self):
         """
@@ -86,21 +108,10 @@ class Client(ModelBaseInterface):
         """
         inputs, targets = self._sample_train_batch()
         inputs, targets = inputs.to(self.device), targets.to(self.device)
-
-        #on supprime le comportement de label flipping de base de la librairie
-        # if self.labelflipping:
-        #     self.model.eval()
-        #     targets_flipped = targets.sub(self.nb_labels - 1).mul(-1)
-        #     self._backward_pass(inputs, targets_flipped)
-        #     self.gradient_LF = self.get_dict_gradients()
-        #     self.model.train()
         
-        #à la place, on change directement les targets:
         if self.labelflipping:
-            perm = torch.tensor(self.permutation, device=self.device)
-            targets = perm[targets]
-            print("flipping labels")
-        
+            inputs, targets = self.poisoning_attack(self.model,inputs, targets) #flip labels
+
         train_loss_value = self._backward_pass(inputs, targets, train_acc=self.store_per_client_metrics)
 
         if self.store_per_client_metrics:

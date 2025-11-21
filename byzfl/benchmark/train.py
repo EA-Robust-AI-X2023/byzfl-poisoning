@@ -95,7 +95,11 @@ def start_training(params):
     # Apply transformations to each dataset
     train_dataset.dataset.transform = dict_datasets[key_dataset_name][1]
     val_dataset.dataset.transform = dict_datasets[key_dataset_name][2]
-
+    
+    #total number of clients:
+    
+    nb_clients=nb_honest_clients + nb_byz_clients
+    
     # Prepare Validation and Test data
     if len(val_dataset) > 0:
         val_loader = DataLoader(
@@ -123,7 +127,7 @@ def start_training(params):
     data_distributor = DataDistributor({
         "data_distribution_name": params_manager.get_name_data_distribution(),
         "distribution_parameter": params_manager.get_parameter_data_distribution(),
-        "nb_honest": nb_honest_clients,
+        "nb_honest": nb_clients,
         "data_loader": train_dataset,
         "batch_size": batch_size,
     })
@@ -137,10 +141,7 @@ def start_training(params):
     attack_parameters["pre_agg_list"] = params_manager.get_preaggregators()
     attack_parameters["f"] = nb_byz_clients
 
-    label_flipping_attack = False
     attack_name = params_manager.get_attack_name()
-
-    label_flipping_attack = attack_name == "LabelFlipping"
 
     # Initialize Honest Clients
     honest_clients = [
@@ -153,16 +154,33 @@ def start_training(params):
             "weight_decay": params_manager.get_honest_clients_weight_decay(),
             "milestones": params_manager.get_milestones(),
             "learning_rate_decay": params_manager.get_learning_rate_decay(),
-            "LabelFlipping": "LabelFlipping" == i==nb_honest_clients-1 and params_manager.get_attack_name(),
+            "LabelFlipping": False, #in our setup, honest clients cannot be poisoned
             "training_dataloader": client_dataloaders[i],
             "momentum": params_manager.get_honest_clients_momentum(),
             "nb_labels": params_manager.get_nb_labels(),
             "store_per_client_metrics": params_manager.get_store_per_client_metrics(),
-            "permutation": params_manager.get_permutation()
         }) for i in range(nb_honest_clients)
     ]
+    poisoned_clients = [
+        Client({
+            "model_name": params_manager.get_model_name(),
+            "device": params_manager.get_device(),
+            "optimizer_name": params_manager.get_optimizer_name(),
+            "learning_rate": params_manager.get_learning_rate(),
+            "loss_name": params_manager.get_loss_name(),
+            "weight_decay": params_manager.get_honest_clients_weight_decay(),
+            "milestones": params_manager.get_milestones(),
+            "learning_rate_decay": params_manager.get_learning_rate_decay(),
+            "LabelFlipping": True,
+            "training_dataloader": client_dataloaders[i+nb_honest_clients],
+            "momentum": params_manager.get_honest_clients_momentum(),
+            "nb_labels": params_manager.get_nb_labels(),
+            "store_per_client_metrics": params_manager.get_store_per_client_metrics(),
+            "poisoning_attack_info": params_manager.get_attack_info() 
+        }) for i in range(nb_byz_clients)
+    ]
     
-
+    clients=honest_clients+poisoned_clients #poisoned clients are always the last clients( i.e. indexed after)
 
     # Server Setup, Use SGD Optimizer
     server = Server({
@@ -178,16 +196,6 @@ def start_training(params):
         "aggregator_info": params_manager.get_aggregator_info(),
         "pre_agg_list": params_manager.get_preaggregators(),
     })
-
-    
-        
-
-    attack = {
-        "name": attack_name,
-        "f": nb_byz_clients,
-        "parameters": attack_parameters,
-    }
-    byz_client = ByzantineClient(attack)
 
     set_random_seed(training_seed)
 
@@ -213,7 +221,7 @@ def start_training(params):
     if training_algorithm_name not in ["DSGD", "FedAvg"]:
         raise ValueError(f"Training algorithm {training_algorithm_name} not supported, supported algorithms are 'DSGD' and 'FedAvg'")
     
-    if training_algorithm_name == "FedAvg" and attack_name == "LabelFlipping":
+    if training_algorithm_name == "FedAvg" and "LabelFlipping" in attack_name:
         raise ValueError("FedAvg does not support Label Flipping attack.")
     
     if training_algorithm_name == "FedAvg":
@@ -222,7 +230,7 @@ def start_training(params):
 
         proportion_selected_clients = training_algorithm_parameters["proportion_selected_clients"]
         local_steps_per_client = training_algorithm_parameters["local_steps_per_client"]
-        nb_clients_to_sample = int(nb_honest_clients * proportion_selected_clients)
+        nb_clients_to_sample = int(nb_clients * proportion_selected_clients)
 
     # Training Loop
     for training_step in range(nb_training_steps):
@@ -262,67 +270,31 @@ def start_training(params):
         
         if training_algorithm_name == "DSGD":
 
-            train_loss_per_client = np.zeros((nb_honest_clients))
+            train_loss_per_client = np.zeros((nb_clients))
 
-            # Honest Clients Compute Gradients
-            for i, client in enumerate(honest_clients):
+            # Clients Compute Gradients
+            for i, client in enumerate(honest_clients+poisoned_clients):
                 train_loss_per_client[i] = client.compute_gradients()
             
             train_loss_list[training_step] = train_loss_per_client.mean()
             
-            # Aggregate Honest Gradients
+            # Aggregate Gradients
             honest_gradients = [client.get_flat_gradients_with_momentum() for client in honest_clients]
-
-            # Deal with Label Flipping Attack
-            # attack_input = (
-            #     [client.get_flat_flipped_gradients() for client in honest_clients]
-            #     if label_flipping_attack
-            #     else honest_gradients
-            # )
-            attack_input = honest_gradients
-
-            # Apply Byzantine Attack
-            byz_vector = byz_client.apply_attack(attack_input)
+            poisoned_gradients =[client.get_flat_gradients_with_momentum() for client in poisoned_clients]
 
             # Combine Honest and Byzantine Gradients
-            gradients = honest_gradients + byz_vector
+            gradients = honest_gradients + poisoned_gradients
 
             # Update Global Model
             server.update_model_with_gradients(gradients)
-
-        elif training_algorithm_name == "FedAvg":
-
-            idx_selected_clients = np.random.choice(
-                range(nb_honest_clients + nb_byz_clients), 
-                size=int(nb_clients_to_sample), 
-                replace=False
-            )
-
-            idx_honest_clients = idx_selected_clients[idx_selected_clients < nb_honest_clients]
-            count_byz_clients = len(idx_selected_clients) - len(idx_honest_clients)
-            
-            train_loss_per_client = np.zeros((len(idx_honest_clients)))
-            honest_weights = []
-
-            for idx, i in enumerate(idx_honest_clients):
-                train_loss_per_client[idx] = honest_clients[i].compute_model_update(local_steps_per_client)
-                honest_weights.append(honest_clients[i].get_flat_parameters())
-            
-            train_loss_list[training_step] = train_loss_per_client.mean()
-
-            byz_client.f = count_byz_clients
-            byz_weights = byz_client.apply_attack(honest_weights)
-
-            weights = honest_weights + byz_weights
-
-            server.update_model_with_weights(weights)
 
         else:
             raise ValueError(f"Training algorithm {training_algorithm_name} not supported")
         
         # Send Updated Model to Clients
         new_model = server.get_dict_parameters()
-        for client in honest_clients:
+        clients=honest_clients+poisoned_clients
+        for client in clients:
             client.set_model_state(new_model)
     
     end_time = time.time()
